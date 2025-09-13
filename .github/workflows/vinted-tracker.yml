@@ -71,7 +71,7 @@ jobs:
         CHROME_PATH: /usr/bin/google-chrome
       run: |
         echo "🚀 Avvio Vinted Tracker..."
-        python vinted_tracker_github.py
+        python vinted_tracker.py
     
     - name: 📊 Upload logs (in caso di errore)
       if: failure()
