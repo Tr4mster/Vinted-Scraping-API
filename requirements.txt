@@ -6,4 +6,5 @@ gspread
 oauth2client
 beautifulsoup4
 selenium
+psutil
 webdriver-manager
