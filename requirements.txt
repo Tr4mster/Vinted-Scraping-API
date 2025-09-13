@@ -1,0 +1,9 @@
+requests
+pandas
+psycopg2-binary
+supabase
+gspread
+oauth2client
+beautifulsoup4
+selenium
+webdriver-manager
