@@ -6,7 +6,6 @@ on:
     # Esegui alle 6:00, 14:00, 22:00 UTC (7:00, 15:00, 23:00 Roma)
     - cron: '0 6,14,22 * * *'
   
-  # Permette esecuzione manuale dal browser GitHub
   workflow_dispatch:
     inputs:
       log_level:
@@ -23,34 +22,30 @@ on:
 jobs:
   vinted-scraping:
     runs-on: ubuntu-latest
-    timeout-minutes: 45  # Timeout di sicurezza
+    timeout-minutes: 45
     
     steps:
     - name: 📥 Checkout repository
       uses: actions/checkout@v4
     
     - name: 🐍 Setup Python 3.11
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-        cache: 'pip'  # Cache delle dipendenze Python
+        cache: 'pip'
     
     - name: 🌐 Install Chrome browser
       run: |
         sudo apt-get update
-        sudo apt-get install -y \
+        sudo apt-get install -y --no-install-recommends \
           wget \
           gnupg \
           unzip \
           xvfb
-        
-        # Installa Google Chrome
         wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
         echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
         sudo apt-get update
-        sudo apt-get install -y google-chrome-stable
-        
-        # Verifica installazione
+        sudo apt-get install -y --no-install-recommends google-chrome-stable
         google-chrome --version
     
     - name: 📦 Install Python dependencies
@@ -60,14 +55,12 @@ jobs:
     
     - name: 🖥️ Setup virtual display (per Selenium)
       run: |
-        # Avvia display virtuale per Chrome headless
         export DISPLAY=:99
         Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
         sleep 3
     
     - name: 🕷️ Run Vinted Tracker
       env:
-        # Variabili d'ambiente (da GitHub Secrets)
         SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
         SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         VINTED_MAIL_USER: ${{ secrets.VINTED_MAIL_USER }}
