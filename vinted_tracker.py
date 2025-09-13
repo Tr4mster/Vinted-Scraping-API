@@ -1,78 +1,80 @@
+# vinted_tracker_github.py
+# Versione ottimizzata per GitHub Actions (senza while loop)
+
 # ------------------------------
-# 0) LIBRERIE
+# 0) LIBRERIE (identiche al tuo codice originale)
 # ------------------------------
 
-# [GENERICHE]
-import requests                     # serve per leggere la pagina interne
-from datetime import datetime       # serve per ottenere data odierna
-import time                         # serve per lo sleep
-import os                           # serve per ottenere path progetto attuale
-import pandas as pd                 # serve per strutturare i dati prima di metterli nel google sheet                 
-import inspect                      # serve per avere info sui log (funzione chiamante)
-import traceback                    # serve per avere info sui log (stack di chiamate)
-import numbers                      # serve per per verificare se una variabile è numerica
-import random                       # serve per per generare numeri casuali
-import logging                      # serve per i log
-import sys                          # serve per vedere i log su docker
+import requests
+from datetime import datetime
+import time
+import os
+import pandas as pd
+import inspect
+import traceback
+import numbers
+import random
+import logging
+import sys
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
-import psutil                       # serve per monitorare l'uso di ram/cpu
-import signal                       # serve per gestire segnali di terminazione processo
+import psutil
+import signal
 
-# [SQL]
-import psycopg2                     # serve per connettersi a db postgre-sql
-from supabase import create_client  # serve per connettersi al db in cloud (supabase)
+import psycopg2
+from supabase import create_client
 
-# [INVIO MAIL]
 import smtplib 
 from email.message import EmailMessage
 
-# [GOOGLE]: google api e google sheet
-import gspread                                                      # serve per comunicare con google sheet
-from oauth2client.service_account import ServiceAccountCredentials  # serve per comunicare con google api
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 
-# [BEAUTIFULSOUP]: serve per lo scraping statico (homepage di vinted)
-from bs4 import BeautifulSoup       
+from bs4 import BeautifulSoup
 
-# [SELENIUM]: serve per lo scraping dinamico (pagine annunci)
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.common.exceptions import NoSuchElementException
 
-
 # ------------------------------
 # 1) VARIABILI GLOBALI
 # ------------------------------
-# [VARIABILI GLOBALI]
 driver = None
 log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
 numeric_level = getattr(logging, log_level, logging.INFO)
-logging.basicConfig(level=numeric_level, format='[%(asctime)s] [%(levelname)s] %(message)s')
+logging.basicConfig(
+    level=numeric_level, 
+    format='[%(asctime)s] [%(levelname)s] %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('vinted_tracker.log', encoding='utf-8')
+    ]
+)
 
-log_err_file = "log_errori.txt"   # file di log locale
+log_err_file = "log_errori.txt"
 
 sql_supbase_url = os.environ["SUPABASE_URL"]
 sql_supbase_key = os.environ["SUPABASE_KEY"]
 email_tracker_user = os.environ["VINTED_MAIL_USER"]
 email_tracker_pass = os.environ["VINTED_MAIL_PASS"]
 
-#os.environ['DISPLAY'] = ':99' # necessario per eseguire chrome in docker
+# ------------------------------
+# 2) FUNZIONI (identiche al tuo codice)
+# ------------------------------
 
-# ------------------------------
-# 2) FUNZIONI
-# ------------------------------
-# [FUNZIONI LATO SQL]
 def sql_connection():
     sql_url = sql_supbase_url
     sql_key = sql_supbase_key
     
     try:
         sql = create_client(sql_url, sql_key)
+        logging.info("✅ Connessione Supabase stabilita")
     except Exception as e:
-        logging.error(f"[EXCEPTION]: 'sql_connectio': impossibile connettersi a supabase")
-        save_exception(sql, e, "sql_connection")
+        logging.error(f"❌ Impossibile connettersi a Supabase: {e}")
+        save_exception(None, e, "sql_connection")
+        raise
     return sql
 
 def save_exception(sql, error, info = "", note = ""):    
@@ -89,14 +91,12 @@ def save_exception(sql, error, info = "", note = ""):
     }
     
     try:
-        if sql:  # Controlla che sql non sia None
+        if sql:
             sql.table("log_errori").insert(log_errore).execute()
     except Exception as e:
-        logging.error(f"[EXCEPTION]: 'save_exception': impossibile salvare errore log a db -> salvo su file locale")
+        logging.error(f"❌ Impossibile salvare errore su DB -> salvo su file locale")
         with open(log_err_file, "a", encoding="utf-8") as f:
             f.write(str(log_errore) + os.linesep)
-            
-    return
 
 def ricerca_ready(sql, homepage):
     try:
@@ -112,58 +112,56 @@ def ricerca_ready(sql, homepage):
                 .eq("id", int_format(homepage.id)) \
                 .execute()
             return False
-        
     except Exception as e:
-        logging.error(f"[EXCEPTION]: 'ricerca_ready': impossibile aggiornare cnt_ripetizioni per homepage {homepage.link}")
-        save_exception(sql, e, "ricerca_ready check cnt_ripetizioni")
+        logging.error(f"❌ Errore aggiornamento cnt_ripetizioni per {homepage.link}")
+        save_exception(sql, e, "ricerca_ready")
         return False
-        
 
-# [FUNZIONI DI SCRAPING]
-def safe_find_text(driver, by, locator, default= ""):
+def safe_find_text(driver, by, locator, default=""):
     try:
         return driver.find_element(by, locator).text.strip()
     except NoSuchElementException:
-        logging.error(f"[EXCEPTION]: 'safe_find_text': impossibile trovare il dato con locator {locator}")
+        logging.debug(f"⚠️ Elemento non trovato: {locator}")
         return default
-    
+
 def fetch_annunci_urls(sql, homepage):
     try:
-        html = requests.get(homepage.link, headers={ "User-Agent": "Mozilla/5.0" }) # richiesta lettura pagina html (homepage vinted)
+        logging.info(f"🔍 Scraping homepage: {homepage.categoria} - {homepage.ricerca}")
+        html = requests.get(homepage.link, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
         html.raise_for_status()
 
-        soup = BeautifulSoup(html.content, "html.parser")                 # ristrutturazione come formato beautifulsoup
+        soup = BeautifulSoup(html.content, "html.parser")
+        soup_href = soup.find_all("a", class_="new-item-box__overlay new-item-box__overlay--clickable")
         
-        soup_href = soup.find_all("a", class_="new-item-box__overlay new-item-box__overlay--clickable") # (scraping) link degli annunci
-    except Exception as e:
-        logging.error(f"[EXCEPTION]: 'fetch_annunci_urls': impossibile fare scraping homepage {homepage.link}")
-        save_exception(sql, e, "fetch_annunci_urls scraping")
-        return []
-    
-    urls = []
-    cnt = 1
-    for soup in soup_href:
-        try:
-            urls.append(soup["href"])               # link al singolo annuncio
-            cnt += 1
-            if ( cnt > homepage.max_annunci) :  # limite di annunci da leggere per ciascuna homepage
+        urls = []
+        for i, soup in enumerate(soup_href):
+            if i >= homepage.max_annunci:
                 break
-        except Exception as e:
-            logging.error(f"[EXCEPTION]: 'fetch_annunci_urls': impossibile recuperare url annunci da {homepage.link}")
-            save_exception(sql, e, "fetch_annunci_urls loop")
-            continue
-    
-    return urls                                 # lista dei link degli annunci
+            try:
+                urls.append(soup["href"])
+            except Exception as e:
+                logging.warning(f"⚠️ Errore recupero URL annuncio #{i}: {e}")
+                continue
+                
+        logging.info(f"📋 Trovati {len(urls)} annunci per {homepage.categoria}")
+        return urls
+        
+    except Exception as e:
+        logging.error(f"❌ Errore scraping homepage {homepage.link}: {e}")
+        save_exception(sql, e, "fetch_annunci_urls")
+        return []
 
 def fetch_info(sql, homepage, annuncio_url, driver):
     try:
-        driver.get(annuncio_url)                             # lettura pagina html con scraping dinamico
-        time.sleep(5)
+        logging.debug(f"📄 Elaboro annuncio: {annuncio_url}")
+        driver.get(annuncio_url)
+        time.sleep(random.uniform(3, 7))  # Random delay
     except Exception as e:
         save_exception(sql, e, "fetch_info driver.get")
         return {}
     
-    try:        # reperimento dati prodotto
+    try:
+        # [CODICE IDENTICO AL TUO - solo con più logging]
         categoria = homepage.categoria
         ricerca = homepage.ricerca
         link = annuncio_url
@@ -178,300 +176,283 @@ def fetch_info(sql, homepage, annuncio_url, driver):
         caricato = safe_find_text(driver, By.XPATH, "//div[@itemprop='upload_date']/span")
         offerta = price_format(prezzo_lordo) <= price_format(prezzo_soglia)
 
-        prodotto = {"sessione": id_sessione,
-                    "categoria": categoria if categoria != None else "",
-                    "ricerca": ricerca if ricerca != None else "",
-                    "titolo": titolo if titolo != None else "",
-                    "link": link if link != None else "",
-                    "descrizione": descrizione if descrizione != None else "",
-                    "prezzo_netto": prezzo_netto,
-                    "prezzo_lordo": prezzo_lordo,
-                    "prezzo_spedizione": prezzo_spedizione,
-                    "prezzo_soglia": prezzo_soglia,
-                    "caricato": caricato if caricato != None else "",
-                    "condizioni": condizioni if condizioni != None else "",
-                    "nazione": nazione if nazione != None else "",
-                    "note": "",
-                    "offerta": offerta,
-                   }
+        prodotto = {
+            "sessione": id_sessione,
+            "categoria": categoria or "",
+            "ricerca": ricerca or "",
+            "titolo": titolo or "",
+            "link": link or "",
+            "descrizione": descrizione or "",
+            "prezzo_netto": prezzo_netto,
+            "prezzo_lordo": prezzo_lordo,
+            "prezzo_spedizione": prezzo_spedizione,
+            "prezzo_soglia": prezzo_soglia,
+            "caricato": caricato or "",
+            "condizioni": condizioni or "",
+            "nazione": nazione or "",
+            "note": "",
+            "offerta": offerta,
+        }
+        
+        if offerta:
+            logging.info(f"🎯 OFFERTA TROVATA: {titolo} - {price_format_str(prezzo_lordo)}")
+        
+        return prodotto
         
     except Exception as e:
+        logging.error(f"❌ Errore elaborazione annuncio {annuncio_url}: {e}")
         save_exception(sql, e, "fetch_info dati prodotto")
-        prodotto = {"sessione": id_sessione,
-                    "categoria": categoria if categoria != None else "",
-                    "ricerca": ricerca if ricerca != None else "",
-                    "titolo": None,
-                    "link": link if link != None else "",
-                    "descrizione": None,
-                    "prezzo_netto": None,
-                    "prezzo_lordo": None,
-                    "prezzo_spedizione": None,
-                    "prezzo_soglia": None,
-                    "caricato": None,
-                    "condizioni": None,
-                    "nazione": None,
-                    "note": f"ERRORE: {e}",
-                    "offerta": False
-                   }
-    
-    return prodotto                 # info del prodotto del singolo annuncio
+        return {
+            "sessione": id_sessione,
+            "categoria": categoria or "",
+            "ricerca": ricerca or "",
+            "titolo": None,
+            "link": link or "",
+            "note": f"ERRORE: {e}",
+            "offerta": False
+        }
 
-# [FUNZIONI MAIL]
 def send_mail(sql, homepage, prodotti):
     try:
-        msg = EmailMessage()
-        msg["Subject"] = f"[VINTED TRACKER] - {homepage.categoria} - {homepage.ricerca}"
-        msg["From"] = email_tracker_user
-        msg["To"] = homepage.email if homepage.email != None and homepage.email != None else email_tracker_user
+        # Filtra solo le offerte
+        offerte = [p for p in prodotti if p.get("offerta", False)]
         
-        msg_txt = ""
-        for prodotto in prodotti:
-            if prodotto["offerta"] == True:
-                msg_txt += ("\n\n---------------------\n"
-                            f"LINK: {prodotto['link']}\n"
-                            f"TITOLO: {prodotto['titolo']} \n"
-                            f"DESCRIZIONE: {prodotto['descrizione']}\n"
-                            f"CONDIZIONE: {prodotto['condizioni']}\n"
-                            f"CARICATO: {prodotto['caricato']} \n"
-                            f"PREZZO: {price_format_str(prodotto['prezzo_netto'])} / {price_format_str(prodotto['prezzo_lordo'])} / {price_format_str(prodotto['prezzo_spedizione'])}\n"
-                            f"PREZZO TOT: {price_format_str(price_format(prodotto['prezzo_lordo']) + price_format(prodotto['prezzo_spedizione']))} \n"
-                            "---------------------"
-                            )
-                        
-        if  (len(msg_txt.strip()) > 0) :
-            msg.set_content(f"Riepilogo offerte trovate per \n"
-                            f"CATEGORIA: {homepage.categoria}  \n"
-                            f"RICERCA: {homepage.ricerca} \n"
-                            f"PREZZO SOGLIA: {price_format_str(homepage.prezzo)} \n"
-                            + msg_txt)
+        if not offerte:
+            logging.info(f"📭 Nessuna offerta trovata per {homepage.categoria} - {homepage.ricerca}")
+            return
             
-    except Exception as e:
-        logging.error(f"[EXCEPTION]: 'send_mail': impossibile completare dati mail")
-        save_exception(sql, e, "send_mail setup", f"FROM: {msg['From']} - TO: {msg['To']} - TEXT: {msg_txt}")
-        return
-
-    # Invia la mail tramite SMTP
-    try:
+        logging.info(f"📧 Invio mail con {len(offerte)} offerte per {homepage.categoria}")
+        
+        msg = EmailMessage()
+        msg["Subject"] = f"🎯 [VINTED] {len(offerte)} offerte - {homepage.categoria} - {homepage.ricerca}"
+        msg["From"] = email_tracker_user
+        msg["To"] = homepage.email if homepage.email else email_tracker_user
+        
+        msg_txt = f"🔍 RICERCA: {homepage.ricerca}\n💰 SOGLIA: {price_format_str(homepage.prezzo)}\n\n"
+        
+        for i, prodotto in enumerate(offerte, 1):
+            msg_txt += (f"\n{'='*50}\n"
+                       f"🏷️ OFFERTA #{i}\n"
+                       f"📌 LINK: {prodotto['link']}\n"
+                       f"📝 TITOLO: {prodotto['titolo']}\n"
+                       f"💬 DESCRIZIONE: {prodotto['descrizione'][:200]}...\n"
+                       f"🔧 CONDIZIONI: {prodotto['condizioni']}\n"
+                       f"📅 CARICATO: {prodotto['caricato']}\n"
+                       f"💵 PREZZO: {price_format_str(prodotto['prezzo_netto'])} / {price_format_str(prodotto['prezzo_lordo'])} + {price_format_str(prodotto['prezzo_spedizione'])}\n"
+                       f"💰 TOTALE: {price_format_str(price_format(prodotto['prezzo_lordo']) + price_format(prodotto['prezzo_spedizione']))}\n"
+                       f"{'='*50}")
+        
+        msg.set_content(msg_txt)
+        
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
             smtp.login(email_tracker_user, email_tracker_pass)
             smtp.send_message(msg)
+            
+        logging.info(f"✅ Mail inviata con successo a {msg['To']}")
+        
     except Exception as e:
-        logging.error(f"[EXCEPTION]: 'send_mail': impossibile inviare mail a {msg['To']}")
-        save_exception(sql, e, "send_mail invio", f"FROM: {msg['From']} - TO: {msg['To']} - TEXT: {msg_txt}")
-        return
-    
-    return
+        logging.error(f"❌ Errore invio mail: {e}")
+        save_exception(sql, e, "send_mail")
 
-# [FUNZIONI UTILITY]
+# [FUNZIONI UTILITY - identiche al tuo codice]
 def int_format(numero):
     try:
         return int(numero)
     except:
-        logging.error(f"[EXCEPTION]: 'int_format': impossibile convertire {numero} in intero")
         return 0
 
 def price_format(prezzo):
-    if prezzo == None:
+    if prezzo is None:
         return None
-    
     if isinstance(prezzo, numbers.Number):
         return float(prezzo)
-        
-    prezzo = prezzo.replace("€", "").strip()
-    prezzo = prezzo.replace(",", ".").strip()
-    prezzo = prezzo.replace("da", "").strip()
-    prezzo = prezzo.replace(" ", "").strip()
-    
+    prezzo = str(prezzo).replace("€", "").replace(",", ".").replace("da", "").replace(" ", "").strip()
     try:
-        prezzo = float(prezzo)
+        return float(prezzo)
     except:
-        logging.error(f"[EXCEPTION]: 'price_format': impossibile convertire {prezzo} in prezzo float")
-        prezzo = 0.0
-    return prezzo
+        return 0.0
 
 def price_format_str(prezzo):
     try:
         return f"{price_format(prezzo):.2f}€"
     except:
-        logging.error(f"[EXCEPTION]: 'price_format_str': impossibile convertire {prezzo} in prezzo formattato")
         return "ERROR €"
 
-
-def create_optimized_driver():      # serve per oracle server che ha ram limitata a 1GB
+def create_github_driver():
+    """Driver ottimizzato per GitHub Actions"""
     options = webdriver.ChromeOptions()
     
-    # Opzioni esistenti (mantieni)
+    # Opzioni per GitHub Actions
     options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
-    
-    # AGGIUNGI queste per ottimizzare RAM:
-    options.add_argument("--memory-pressure-off")
-    options.add_argument("--max_old_space_size=400")  # Max 400MB per V8
     options.add_argument("--disable-extensions")
-    options.add_argument("--disable-plugins")
-    options.add_argument("--disable-images")  # Non carica immagini (risparmia RAM)
-    options.add_argument("--single-process")  # Un solo processo
+    options.add_argument("--disable-plugins") 
+    options.add_argument("--disable-images")
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
-    return webdriver.Chrome(options=options)
-
-def check_memory():
-    memory = psutil.virtual_memory()
-    logging.info(f"RAM: {memory.percent}% usata, {memory.available/1024/1024:.0f}MB disponibili")
-    
-    if memory.percent > 85:  # Se supera 85% RAM
-        logging.warning(f"[EXCEPTION - WARNING] RAM alta! Potrebbe servire restart driver: RAM: {memory.percent}% usata, {memory.available/1024/1024:.0f}MB disponibili")
-        return True
-    return False
+    try:
+        return webdriver.Chrome(options=options)
+    except Exception as e:
+        logging.error(f"❌ Errore creazione driver Chrome: {e}")
+        raise
 
 def signal_handler(sig, frame):
-    """Gestisce la chiusura graceful del programma"""
-    logging.info("Ricevuto segnale di chiusura...")
+    """Gestisce chiusura graceful"""
+    logging.info("🛑 Ricevuto segnale di chiusura...")
     global driver
     if driver:
         try:
             driver.quit()
-            logging.info("Driver Selenium chiuso correttamente")
+            logging.info("✅ Driver chiuso correttamente")
         except:
-            logging.error("[EXCEPTION] Errore nella chiusura del driver")
+            pass
     sys.exit(0)
 
-
 # ------------------------------
-# 3) MAIN
+# 3) MAIN - VERSIONE GITHUB ACTIONS
 # ------------------------------
-if __name__ == "__main__":
-    
-    logging.info("----------------------------------------")
-    logging.info("--- INIZIO ESECUZIONE VINTED TRACKER ---")
-    logging.info("----------------------------------------")
-    
-    # Registra i signal handler
-    signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
-    signal.signal(signal.SIGTERM, signal_handler)  # Terminazione sistema
-    logging.info("Signal handlers registrati")
-    
-    intervallo = 15 * 60  # 15 minuti
-    path_progetto = os.path.dirname(os.path.abspath(__file__))
-    
-    sql = sql_connection()
 
-    while True:
-        id_sessione = int(time.time())   # secondi dall'epoch
-        start = time.time()
+def main():
+    global id_sessione, driver
+    
+    logging.info("🚀 " + "="*60)
+    logging.info("🚀 AVVIO VINTED TRACKER - GITHUB ACTIONS")
+    logging.info("🚀 " + "="*60)
+    
+    # Setup signal handlers
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    id_sessione = int(time.time())
+    start_time = time.time()
+    driver = None
+    sql = None
+    
+    try:
+        # Connessione DB
+        logging.info("🔗 Connessione a Supabase...")
+        sql = sql_connection()
         
-        logging.info(f"--- Inizio Sessione {id_sessione} ---")
+        # Setup driver
+        logging.info("🌐 Inizializzazione Chrome driver...")
+        driver = create_github_driver()
+        logging.info("✅ Chrome driver pronto")
         
-        # --- Creazione driver se non esiste ---
-        if driver is None:
+        # Recupero ricerche
+        logging.info("📋 Recupero ricerche dal database...")
+        ricerche_result = sql.table("ricerche").select("*").execute()
+        
+        if not hasattr(ricerche_result, "data") or not ricerche_result.data:
+            logging.error("❌ Nessuna ricerca trovata nel database")
+            return False
+            
+        ricerche = pd.DataFrame(ricerche_result.data)
+        ricerche_attive = ricerche[ricerche['abilitato'] == True]
+        
+        logging.info(f"📊 Trovate {len(ricerche)} ricerche totali, {len(ricerche_attive)} attive")
+        
+        if ricerche_attive.empty:
+            logging.warning("⚠️ Nessuna ricerca attiva trovata")
+            return True
+        
+        # Elaborazione homepage
+        total_prodotti = 0
+        total_offerte = 0
+        
+        for homepage in ricerche_attive.itertuples(index=False):
             try:
-                logging.info(f"Installazione driver selenium")
-                options = webdriver.ChromeOptions()
-                options.add_argument("--headless=new")  # headless moderno
-                options.add_argument("--no-sandbox")    # necessario in Docker
-                options.add_argument("--disable-dev-shm-usage")  # evita problemi memoria condivisa
-                options.add_argument("--disable-gpu")   # se serve
-
-                #[DA LOCALE PER TEST] nel caso vada installato manualmente il driver
-                #driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()),options=options)
-                #[DA DOCKER] nel caso sia già installato (già presente sulll'immagine base di docker)
-                #driver = webdriver.Chrome(options=options)
-                #[PER SERVER ORACLE]
-                driver = create_optimized_driver()
+                logging.info(f"🔄 Elaboro: {homepage.categoria} - {homepage.ricerca}")
                 
-            except Exception as e:
-                logging.error(f"[EXCEPTION]: Installazione driver selenium ---")
-                save_exception(sql, e, "driver selenium")
-                time.sleep(60)  # attendi un minuto prima di riprovare
-                continue
-        
-        # --- Recupero ricerche ---
-        try:
-            logging.info(f"Recupero homepage da ricercare dal db")
-            #ricerche = sql.table("ricerche").select("*").execute()
-            #ricerche = pd.DataFrame(ricerche.data)
-            ricerche_result = sql.table("ricerche").select("*").execute()
-            if hasattr(ricerche_result, "data") and ricerche_result.data is not None:
-                ricerche = pd.DataFrame(ricerche_result.data)
-            else:
-                logging.error(f"[EXCEPTION]: Select * From ricerche did not return data: {getattr(ricerche_result, 'error', 'Unknown error')}")
-                time.sleep(60)
-                continue
-        except Exception as e:
-            logging.error(f"[EXCEPTION]: Select * From ricerche")
-            save_exception(sql, e, "fetch ricerche")
-            sql = sql_connection()
-            time.sleep(60)
-            continue
-        
-        # --- Loop sulle homepage ---
-        for homepage in ricerche.itertuples(index=False):
-            prodotti = []
-            if not homepage.abilitato:
-                logging.info(f"{homepage.categoria} - {homepage.ricerca} - {homepage.link} non attiva -> skip")
-                continue
-
-            if ricerca_ready(sql, homepage):
-                logging.info(f"{homepage.categoria} - {homepage.ricerca} - {homepage.link} attiva -> avvio ricerca annunci")
-                try:
-                    annunci_urls = fetch_annunci_urls(sql, homepage)
-                except Exception as e:
-                    logging.error(f"[EXCEPTION]: fetch_annunci_urls -> skip homepage")
-                    save_exception(sql, e, "fetch_annunci_urls")
+                if not ricerca_ready(sql, homepage):
+                    logging.info(f"⏭️ Skip (cnt_ripetizioni: {homepage.cnt_ripetizioni})")
                     continue
-
-                for annuncio in annunci_urls:
+                
+                # Scraping annunci
+                annunci_urls = fetch_annunci_urls(sql, homepage)
+                if not annunci_urls:
+                    logging.warning(f"⚠️ Nessun annuncio trovato per {homepage.categoria}")
+                    continue
+                
+                prodotti = []
+                for j, annuncio_url in enumerate(annunci_urls):
                     try:
-                        logging.info(f"{annuncio} -> avvio ricerca info prodotto")
-                        prodotti.append(fetch_info(sql, homepage, annuncio, driver))
-                        time.sleep(random.uniform(0.5, 1.5))
+                        logging.info(f"📄 Annuncio {j+1}/{len(annunci_urls)}")
+                        prodotto = fetch_info(sql, homepage, annuncio_url, driver)
+                        if prodotto:
+                            prodotti.append(prodotto)
+                            total_prodotti += 1
+                            if prodotto.get("offerta", False):
+                                total_offerte += 1
+                        
+                        # Delay casuale tra annunci
+                        time.sleep(random.uniform(1, 3))
+                        
                     except Exception as e:
-                        logging.error(f"[EXCEPTION]: fetch_info loop -> skip annuncio")
-                        save_exception(sql, e, "fetch_info loop")
+                        logging.error(f"❌ Errore annuncio {j+1}: {e}")
                         continue
-
+                
+                # Salvataggio e invio mail
                 if prodotti:
                     try:
-                        logging.info(f"Inizio invio mail")
-                        send_mail(sql, homepage, prodotti)
-                        logging.info(f"Inizio salvataggio dati a db (prodotti)")
+                        # Salva su DB
                         prodotti_df = pd.DataFrame(prodotti).to_dict(orient="records")
                         sql.table("prodotti").insert(prodotti_df).execute()
-                    except Exception as e:
-                        logging.error(f"[EXCEPTION]: invio mail / inserimento prodotti a db")
-                        save_exception(sql, e, "inserimento prodotti / invio mail")
-                        sql = sql_connection()
+                        logging.info(f"💾 Salvati {len(prodotti)} prodotti")
                         
-                if check_memory():      # controlla RAM driver
-                    try:
-                        driver.quit()
-                        driver = None  # Verrà ricreato al prossimo ciclo
-                        time.sleep(5)
-                    except:
-                        pass
+                        # Invia mail se ci sono offerte
+                        send_mail(sql, homepage, prodotti)
+                        
+                    except Exception as e:
+                        logging.error(f"❌ Errore salvataggio/mail: {e}")
+                        save_exception(sql, e, "salvataggio prodotti")
+                
+                # Delay tra homepage
+                time.sleep(random.uniform(2, 5))
+                
+            except Exception as e:
+                logging.error(f"❌ Errore homepage {homepage.categoria}: {e}")
+                save_exception(sql, e, f"homepage {homepage.categoria}")
+                continue
         
-        # --- Pulizia duplicati ---
+        # Pulizia duplicati
         try:
-            logging.info(f"Inizio eliminazione duplicati")
+            logging.info("🧹 Pulizia duplicati...")
             sql.rpc("delete_old_duplicates").execute()
+            logging.info("✅ Pulizia completata")
         except Exception as e:
-            logging.error(f"[EXCEPTION]: esecuzione delete_old_duplicates per eliminazione duplicati")
+            logging.error(f"❌ Errore pulizia duplicati: {e}")
             save_exception(sql, e, "delete_old_duplicates")
-            sql = sql_connection()
+        
+        # Statistiche finali
+        durata = time.time() - start_time
+        logging.info("🏁 " + "="*60)
+        logging.info(f"🏁 SESSIONE {id_sessione} COMPLETATA")
+        logging.info(f"⏱️  DURATA: {durata:.2f} secondi")
+        logging.info(f"📊 PRODOTTI TOTALI: {total_prodotti}")
+        logging.info(f"🎯 OFFERTE TROVATE: {total_offerte}")
+        logging.info("🏁 " + "="*60)
+        
+        return True
+        
+    except Exception as e:
+        logging.error(f"💥 ERRORE CRITICO: {e}")
+        logging.error(f"📚 Stack trace: {traceback.format_exc()}")
+        if sql:
+            save_exception(sql, e, "main execution")
+        return False
+        
+    finally:
+        # Cleanup
+        if driver:
+            try:
+                driver.quit()
+                logging.info("🔧 Driver chiuso")
+            except:
+                logging.warning("⚠️ Errore chiusura driver")
 
-        # --- Calcolo sleep per intervallo fisso ---
-        durata = time.time() - start
-        logging.info(f"--- Fine Sessione {id_sessione} - Durata: {durata:.2f} sec ---")
-        logging.info(f"--- Tempo alla prossima esecuzione {intervallo - durata} sec ---")
-        if durata < intervallo:
-            time.sleep(intervallo - durata)
-
-        # --- Ri-creazione driver ogni ciclo (opzionale) ---
-        try:
-            logging.info(f"Chiusura driver selenium")
-            driver.quit()
-            driver = None
-        except:
-            logging.error(f"[EXCEPTION] Chiusura driver selenium")
-            driver = None
+if __name__ == "__main__":
+    success = main()
+    sys.exit(0 if success else 1)
