@@ -1,0 +1,91 @@
+# .github/workflows/vinted-tracker.yml
+name: Vinted Tracker Automation
+
+on:
+  schedule:
+    # Esegui alle 6:00, 14:00, 22:00 UTC (7:00, 15:00, 23:00 Roma)
+    - cron: '0 6,14,22 * * *'
+  
+  # Permette esecuzione manuale dal browser GitHub
+  workflow_dispatch:
+    inputs:
+      log_level:
+        description: 'Log level'
+        required: false
+        default: 'INFO'
+        type: choice
+        options:
+        - DEBUG
+        - INFO
+        - WARNING
+        - ERROR
+
+jobs:
+  vinted-scraping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45  # Timeout di sicurezza
+    
+    steps:
+    - name: 📥 Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: 🐍 Setup Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        cache: 'pip'  # Cache delle dipendenze Python
+    
+    - name: 🌐 Install Chrome browser
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          wget \
+          gnupg \
+          unzip \
+          xvfb
+        
+        # Installa Google Chrome
+        wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+        echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+        sudo apt-get update
+        sudo apt-get install -y google-chrome-stable
+        
+        # Verifica installazione
+        google-chrome --version
+    
+    - name: 📦 Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: 🖥️ Setup virtual display (per Selenium)
+      run: |
+        # Avvia display virtuale per Chrome headless
+        export DISPLAY=:99
+        Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
+        sleep 3
+    
+    - name: 🕷️ Run Vinted Tracker
+      env:
+        # Variabili d'ambiente (da GitHub Secrets)
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        VINTED_MAIL_USER: ${{ secrets.VINTED_MAIL_USER }}
+        VINTED_MAIL_PASS: ${{ secrets.VINTED_MAIL_PASS }}
+        LOG_LEVEL: ${{ github.event.inputs.log_level || 'INFO' }}
+        DISPLAY: :99
+        CHROME_BIN: /usr/bin/google-chrome
+        CHROME_PATH: /usr/bin/google-chrome
+      run: |
+        echo "🚀 Avvio Vinted Tracker..."
+        python vinted_tracker_github.py
+    
+    - name: 📊 Upload logs (in caso di errore)
+      if: failure()
+      uses: actions/upload-artifact@v3
+      with:
+        name: error-logs-${{ github.run_number }}
+        path: |
+          *.log
+          log_errori.txt
+        retention-days: 7
