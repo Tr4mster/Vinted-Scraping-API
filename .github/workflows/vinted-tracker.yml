@@ -82,7 +82,7 @@ jobs:
     
     - name: 📊 Upload logs (in caso di errore)
       if: failure()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: error-logs-${{ github.run_number }}
         path: |
