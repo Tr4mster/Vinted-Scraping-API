@@ -55,10 +55,10 @@ logging.basicConfig(
 
 log_err_file = "log_errori.txt"
 
-sql_supbase_url = os.environ["SUPABASE_URL"]
-sql_supbase_key = os.environ["SUPABASE_KEY"]
-email_tracker_user = os.environ["VINTED_MAIL_USER"]
-email_tracker_pass = os.environ["VINTED_MAIL_PASS"]
+sql_supbase_url = os.getenv("SUPABASE_URL")
+sql_supbase_key = os.getenv("SUPABASE_KEY")
+email_tracker_user = os.getenv("VINTED_MAIL_USER")
+email_tracker_pass = os.getenv("VINTED_MAIL_PASS")
 
 # ------------------------------
 # 2) FUNZIONI (identiche al tuo codice)
@@ -456,3 +456,4 @@ def main():
 if __name__ == "__main__":
     success = main()
     sys.exit(0 if success else 1)
+
