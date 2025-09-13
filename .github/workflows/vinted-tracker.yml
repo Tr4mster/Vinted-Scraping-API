@@ -23,6 +23,7 @@ jobs:
   vinted-scraping:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    environment: .env
     
     steps:
     - name: 📥 Checkout repository
